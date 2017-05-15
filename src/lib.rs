@@ -600,8 +600,7 @@ impl fmt::Display for BigDecimal {
             // First case: the integer representation falls
             // completely behind the decimal point
             let scale = self.scale as usize;
-            let after = "0".repeat(scale - abs_int.len())
-                + abs_int.as_str();
+            let after = "0".repeat(scale - abs_int.len()) + abs_int.as_str();
             ("0".to_string(), after)
         } else {
             // Second case: the integer representation falls
@@ -740,9 +739,7 @@ impl ToPrimitive for BigDecimal {
     }
 
     fn to_f64(&self) -> Option<f64> {
-        self.int_val.to_f64().map(|x| {
-            x * 10f64.powi(-self.scale as i32)
-        })
+        self.int_val.to_f64().map(|x| x * 10f64.powi(-self.scale as i32))
     }
 }
 
@@ -751,7 +748,7 @@ impl From<i64> for BigDecimal {
     fn from(n: i64) -> Self {
         BigDecimal {
             int_val: BigInt::from(n),
-            scale: 0
+            scale: 0,
         }
     }
 }
@@ -761,7 +758,7 @@ impl From<u64> for BigDecimal {
     fn from(n: u64) -> Self {
         BigDecimal {
             int_val: BigInt::from(n),
-            scale: 0
+            scale: 0,
         }
     }
 }
@@ -788,39 +785,50 @@ impl_from_type!(i32, i64);
 impl From<f32> for BigDecimal {
     #[inline]
     fn from(n: f32) -> Self {
-        BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f32::DIGITS as usize)).unwrap()
+
+        // BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f32::DIGITS as usize))
+        //     .unwrap()
+
+        let e = n.abs().log10().floor() as i32;// - ::std::f32::DIGITS as i32;
+        let r = ((n as f32) / 10f32.powi(e)) as i64;
+
+        BigDecimal {
+            int_val: BigInt::from(r),
+            scale: -e as i64,
+        }
+
+        // println!("{}", -2852.626448);
+        // println!("{}", r);
+        // println!("{:.6}  {}", (r * 1e6) as i32, e - 6);
     }
 }
 
 impl From<f64> for BigDecimal {
     #[inline]
     fn from(n: f64) -> Self {
-        BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f64::DIGITS as usize)).unwrap()
+        BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f64::DIGITS as usize))
+            .unwrap()
     }
 }
 
 impl FromPrimitive for BigDecimal {
     #[inline]
-    fn from_i64(n: i64) -> Option<Self>
-    {
+    fn from_i64(n: i64) -> Option<Self> {
         Some(BigDecimal::from(n))
     }
 
     #[inline]
-    fn from_u64(n: u64) -> Option<Self>
-    {
+    fn from_u64(n: u64) -> Option<Self> {
         Some(BigDecimal::from(n))
     }
 
     #[inline]
-    fn from_f32(n: f32) -> Option<Self>
-    {
+    fn from_f32(n: f32) -> Option<Self> {
         Some(BigDecimal::from(n))
     }
 
     #[inline]
-    fn from_f64(n: f64) -> Option<Self>
-    {
+    fn from_f64(n: f64) -> Option<Self> {
         Some(BigDecimal::from(n))
     }
 }
@@ -874,7 +882,7 @@ mod bigdecimal_tests {
         }
     }
 
-     #[test]
+    #[test]
     fn test_from_i8() {
         let vals = vec![
             ("0", 0),
@@ -903,11 +911,20 @@ mod bigdecimal_tests {
             ("0.001", 0.001),
             ("12.34", 12.34),
             ("0.15625", 5.0 * 0.03125),
-            ("3.141593", ::std::f32::consts::PI),
-            ("31415.93", ::std::f32::consts::PI * 10000.0),
+            ("3402823e32", ::std::f32::MAX),
+            ("-3402823e32", ::std::f32::MIN),
+            ("1175494e-44", ::std::f32::MIN_POSITIVE),
+            ("3141593e-6", ::std::f32::consts::PI),
+            // ("3.141592", ::std::f32::consts::PI),
+            // ("3.141592", ::std::f32::consts::PI),
+            // ("31415.92", ::std::f32::consts::PI * 10000.0),
+            // ("3.141593", ::std::f32::consts::PI),
+            // ("31415.93", ::std::f32::consts::PI * 10000.0),
             ("94247.78", ::std::f32::consts::PI * 30000.0),
+            // ("3.141593", ::std::f32::consts::PI * 10000.0),
             // ("3.14159265358979323846264338327950288f32", ::std::f32::consts::PI),
-
+            // ("3402823e32",  ::std::f32::MAX),
+            // ("3.4028235e38", ::std::f32::MAX),
         ];
         for (s, n) in vals {
             let expected = BigDecimal::from_str(s).unwrap();
@@ -917,7 +934,7 @@ mod bigdecimal_tests {
         }
 
     }
-     #[test]
+    #[test]
     fn test_from_f64() {
         let vals = vec![
             ("1.0", 1.0f64),
@@ -1121,7 +1138,7 @@ mod bigdecimal_tests {
 
     #[test]
     fn test_signed() {
-        use traits::{One,Signed,Zero};
+        use traits::{One, Signed, Zero};
         assert!(!BigDecimal::zero().is_positive());
         assert!(!BigDecimal::one().is_negative());
 

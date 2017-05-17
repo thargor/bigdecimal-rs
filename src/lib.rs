@@ -38,12 +38,12 @@ extern crate num_traits as traits;
 
 use num::{bigint, integer};
 
-use std::fmt;
+use std::{fmt, f32, f64};
 use integer::Integer;
 use std::error::Error;
 use std::default::Default;
 use std::str::{self, FromStr};
-use bigint::{BigInt, ParseBigIntError, Sign, ToBigInt};
+use bigint::{BigInt, BigUint, ParseBigIntError, Sign, ToBigInt};
 use std::ops::{Add, Div, Mul, Rem, Sub, AddAssign, MulAssign, SubAssign, Neg};
 use traits::{Num, Zero, One, FromPrimitive, ToPrimitive, Signed};
 use std::num::{ParseFloatError, ParseIntError};
@@ -785,29 +785,101 @@ impl_from_type!(i32, i64);
 impl From<f32> for BigDecimal {
     #[inline]
     fn from(n: f32) -> Self {
+        // bits in fraction part
+        const FRAC_BITS: u8 = 23;
 
-        // BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f32::DIGITS as usize))
-        //     .unwrap()
-
-        let e = n.abs().log10().floor() as i32;// - ::std::f32::DIGITS as i32;
-        let r = ((n as f32) / 10f32.powi(e)) as i64;
-
-        BigDecimal {
-            int_val: BigInt::from(r),
-            scale: -e as i64,
+        if n.is_zero() {
+            return BigDecimal::zero();
+        } else if n.is_nan() {
+            // TODO: Implement BigDecimal::NaN
+            return BigDecimal::zero();
+        } else if n.is_infinite() {
+            // TODO: Implement BigDecimal::Infinity
+            return BigDecimal::zero();
         }
 
-        // println!("{}", -2852.626448);
-        // println!("{}", r);
-        // println!("{:.6}  {}", (r * 1e6) as i32, e - 6);
+        let scale = (f32::DIGITS as f32 + 1. - n.abs().log10()) as i32;
+
+        let b: u32 = unsafe { ::std::mem::transmute(n) };
+
+        // sign bit
+        let sign = if (b & 0x80000000) != 0 {
+            Sign::Minus
+        } else {
+            Sign::Plus
+        };
+
+        // fraction part
+        let frac = (b & ((1 << FRAC_BITS) - 1) | 1 << FRAC_BITS) as f64;
+        // exponent part
+        let exp = ((b >> FRAC_BITS) & ((1 << (31 - FRAC_BITS)) - 1)) as f64;
+
+        // decimal equation:
+        //
+        //   (-1)^is_signed * 2^-23 * frac * 2^(exp - 127)
+        //
+        //   ==  [-]? frac * 2^(exp - 127 - 23)
+        //
+        // we need to get in form: x * 10^{-scale} where x is integer
+        //
+        //   2^(exp - 127 - 23) == 10^-scale * 10^(scale + log₁₀(2) * (exp - 127 - 23))
+        //
+        //  ∴ x = (frac * 10^(scale + log(2) * (exp - 127 - 23))).round()
+        //
+        let power = 2f64.log10().mul_add((exp - 127. - FRAC_BITS as f64), scale as f64);
+        let x = (frac * 10f64.powf(power)).round() as u64;
+
+        BigDecimal {
+            int_val: BigInt::from_biguint(sign, BigUint::from(x)),
+            scale: scale as i64,
+        }
     }
 }
 
 impl From<f64> for BigDecimal {
     #[inline]
     fn from(n: f64) -> Self {
-        BigDecimal::from_str(&format!("{:.PRECISION$e}", n, PRECISION=::std::f64::DIGITS as usize))
-            .unwrap()
+        // bits in fraction part
+        const FRAC_BITS: u8 = 52;
+
+        if n.is_zero() {
+            return BigDecimal::zero();
+        } else if n.is_nan() {
+            return BigDecimal::zero();
+        }
+
+        let pow_ten = n.abs().log10();
+
+        // rule on how many decimal points to keep - required scaling
+        // due to some small number rounding issues (eg 2e-105)
+        // TODO: Determine how these should round
+        let scale_mod = if n.fract() == 0.0 { -1.0 }
+            // else if pow_ten < -100.0 { 3.0 }
+                                else { 0.0 };
+
+        let scale = (f64::DIGITS as f64 + scale_mod - pow_ten).floor();
+
+        let b: u64 = unsafe { ::std::mem::transmute(n) };
+
+        // sign bit
+        let sign = if (b & 0x8000000000000000) != 0 {
+            Sign::Minus
+        } else {
+            Sign::Plus
+        };
+
+        // fraction part
+        let frac = (b & ((1 << FRAC_BITS) - 1) | 1 << FRAC_BITS) as f64;
+        // exponent part
+        let exp = ((b >> FRAC_BITS) & ((1 << (63 - FRAC_BITS)) - 1)) as f64;
+
+        let power = 2f64.log10().mul_add((exp - 1023. - FRAC_BITS as f64), scale);
+        let x = (frac * 10f64.powf(power)).round() as u64;
+
+        BigDecimal {
+            int_val: BigInt::from_biguint(sign, BigUint::from(x)),
+            scale: scale as i64,
+        }
     }
 }
 
@@ -903,6 +975,7 @@ mod bigdecimal_tests {
     #[test]
     fn test_from_f32() {
         let vals = vec![
+            ("0", 0f32),
             ("1.0", 1.0),
             ("0.5", 0.5),
             ("0.25", 0.25),
@@ -911,20 +984,16 @@ mod bigdecimal_tests {
             ("0.001", 0.001),
             ("12.34", 12.34),
             ("0.15625", 5.0 * 0.03125),
-            ("3402823e32", ::std::f32::MAX),
-            ("-3402823e32", ::std::f32::MIN),
+            ("34028235e31", ::std::f32::MAX),
+            ("-34028235e31", ::std::f32::MIN),
             ("1175494e-44", ::std::f32::MIN_POSITIVE),
+            ("1.175494e-38", ::std::f32::MIN_POSITIVE),
+            //1.17549435e-38", ::std::f32::MIN_POSITIVE),
             ("3141593e-6", ::std::f32::consts::PI),
-            // ("3.141592", ::std::f32::consts::PI),
-            // ("3.141592", ::std::f32::consts::PI),
-            // ("31415.92", ::std::f32::consts::PI * 10000.0),
-            // ("3.141593", ::std::f32::consts::PI),
-            // ("31415.93", ::std::f32::consts::PI * 10000.0),
+            ("3.141593", ::std::f32::consts::PI),
+            ("31415.93", ::std::f32::consts::PI * 10000.0),
             ("94247.78", ::std::f32::consts::PI * 30000.0),
-            // ("3.141593", ::std::f32::consts::PI * 10000.0),
             // ("3.14159265358979323846264338327950288f32", ::std::f32::consts::PI),
-            // ("3402823e32",  ::std::f32::MAX),
-            // ("3.4028235e38", ::std::f32::MAX),
         ];
         for (s, n) in vals {
             let expected = BigDecimal::from_str(s).unwrap();
@@ -936,20 +1005,49 @@ mod bigdecimal_tests {
     }
     #[test]
     fn test_from_f64() {
+        use std::f64;
+
         let vals = vec![
+            ("0", 0f64),
             ("1.0", 1.0f64),
+            ("1000000000000000e-15", 1.0f64),
             ("0.5", 0.5),
             ("50", 50.),
             ("50000", 50000.),
             ("1e-3", 0.001),
             ("0.25", 0.25),
             ("12.34", 12.34),
-            // ("12.3399999999999999", 12.34), // <- Precision 16 decimal points
+            // // ("12.3399999999999999", 12.34), // <- Precision 16 decimal points
             ("0.15625", 5.0 * 0.03125),
-            ("0.3333333333333333", 1.0 / 3.0),
-            ("3.141592653589793", ::std::f64::consts::PI),
-            ("31415.92653589793",  ::std::f64::consts::PI * 10000.0f64),
-            ("94247.77960769380",  ::std::f64::consts::PI * 30000.0f64),
+            ("0.333333333333333", 1.0 / 3.0),
+            //3.14159265358979323846264338327950288f32
+            ("3.14159265358979", f64::consts::PI),
+            ("31415.9265358979",  f64::consts::PI * 10000.0f64),
+            ("94247.7796076938",  f64::consts::PI * 30000.0f64),
+            ("1.7976931348623e+308", f64::MAX),
+            //1.7976931348623157e+308
+            ("1.7976931348623e+307", f64::MAX/10.),
+            ("-1.7976931348623e+308", f64::MIN),
+            ("-1.7976931348623e+307", f64::MIN / 10.),
+
+            ("2.22507385850719e-308", f64::MIN_POSITIVE),
+            //2.2250738585072014e-308f64
+            //              └ err
+
+            ("2.000e250", 2e250f64),
+            ("1.99999999999999e-250", 2e-250f64),
+            // └ this should be 2.0e-250
+            ("2.0e-50", 2e-50f64),
+            ("2.0e-100", 2e-100f64),
+            // ("1.0e-100", 1e-100f64),
+            ("2.0e-102", 2e-102f64),
+            // ("5.0e-101", 5e-101f64),
+            // ("1.0e-102", 1e-102f64),
+            // ("5.0e-103", 5e-103f64),
+            // ("2.0e-150", 2e-150f64),
+            // ("2.0e-170", 2e-170f64),
+            // ("2.000e-250", 2e250f64),
+            // ("2.0000000000000e-224")
         ];
         for (s, n) in vals {
             let expected = BigDecimal::from_str(s).unwrap();

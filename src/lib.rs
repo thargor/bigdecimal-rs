@@ -695,7 +695,7 @@ impl fmt::Display for BigDecimal {
             _ => false,
         };
         //pad_integral does the right thing although we have a decimal
-        f.pad_integral(non_negative ,"",&complete_without_sign)
+        f.pad_integral(non_negative, "", &complete_without_sign)
     }
 }
 

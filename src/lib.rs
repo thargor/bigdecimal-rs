@@ -40,11 +40,14 @@
 //! println!("Input ({}) with 10 decimals: {} vs {})", input, dec, float);
 //! ```
 
+#![feature(fmt_flags_align)]
+extern crate core;
 extern crate num;
 extern crate num_traits as traits;
 #[cfg(feature = "serde")]
 extern crate serde;
 
+use core::fmt::Alignment;
 use num::{bigint, integer};
 
 use std::fmt;
@@ -684,26 +687,44 @@ impl fmt::Display for BigDecimal {
         };
 
         // Concatenate everything
-        let complete = if !after.is_empty() {
+        let complete_without_sign = if !after.is_empty() {
             before + "." + after.as_str()
         } else {
             before
         };
 
-        // TODO: f.width()
-
-        // Write out the sign
-        match self.int_val.sign() {
+        let sign = match self.int_val.sign() {
             Sign::Plus | Sign::NoSign => {
                 if f.sign_plus() {
-                    f.write_str("+")?;
+                    "+"
+                } else {
+                    ""
                 }
             }
-            Sign::Minus => {
-                f.write_str("-")?;
+            Sign::Minus => "-"
+        };
+
+
+        if let Some(width) = f.width() {
+            let cur_len = complete_without_sign.len() + sign.len();
+            if cur_len < width {
+                let to_pad = width - cur_len;
+                let mut zero_padding = String::new();
+                if f.sign_aware_zero_pad() {
+                    for _ in 0..to_pad { zero_padding.push('0') }
+                }
+                let complete_with_sign = "".to_owned() + sign + &zero_padding + &complete_without_sign;
+                match f.align() {
+                    Alignment::Left => { write!(f, "{:<width$}", complete_with_sign, width = width) }
+                    Alignment::Right | Alignment::Unknown => { write!(f, "{:>width$}", complete_with_sign, width = width) }
+                    Alignment::Center => { write!(f, "{:^width$}", complete_with_sign, width = width) }
+                }
+            } else {
+                write! {f, "{}{}", sign, complete_without_sign}
             }
+        } else {
+            write! {f, "{}{}", sign, complete_without_sign}
         }
-        f.write_str(&complete)
     }
 }
 
@@ -1444,20 +1465,23 @@ mod bigdecimal_tests {
     #[test]
     fn test_fmt() {
         let vals = vec![
-          // b  s   ( {}        {:.1}     {:.4}    )
-            (1, 0,  (  "1",     "1.0",    "1.0000")),
-            (1, 1,  (  "0.1",   "0.1",    "0.1000")),
-            (1, 2,  (  "0.01",  "0.0",    "0.0100")),
-            (1, -2, ("100",   "100.0",  "100.0000")),
-            (-1, 0, ( "-1",    "-1.0",   "-1.0000")),
-            (-1, 1, ( "-0.1",  "-0.1",   "-0.1000")),
-            (-1, 2, ( "-0.01", "-0.0",   "-0.0100")),
+          // b  s   ( {}        {:.1}     {:.4}      {:4.1}  {:+05.1}  {:<4.1}
+            (1, 0,  (  "1",     "1.0",    "1.0000",  " 1.0",  "+01.0",   "1.0 " )),
+            (1, 1,  (  "0.1",   "0.1",    "0.1000",  " 0.1",  "+00.1",   "0.1 " )),
+            (1, 2,  (  "0.01",  "0.0",    "0.0100",  " 0.0",  "+00.0",   "0.0 " )),
+            (1, -2, ("100",   "100.0",  "100.0000", "100.0", "+100.0", "100.0" )),
+            (-1, 0, ( "-1",    "-1.0",   "-1.0000",  "-1.0",  "-01.0",  "-1.0" )),
+            (-1, 1, ( "-0.1",  "-0.1",   "-0.1000",  "-0.1",  "-00.1",  "-0.1" )),
+            (-1, 2, ( "-0.01", "-0.0",   "-0.0100",  "-0.0",  "-00.0",  "-0.0" )),
         ];
         for (i, scale, results) in vals {
             let x = BigDecimal::new(num::BigInt::from(i), scale);
             assert_eq!(format!("{}", x), results.0);
             assert_eq!(format!("{:.1}", x), results.1);
             assert_eq!(format!("{:.4}", x), results.2);
+            assert_eq!(format!("{:4.1}", x), results.3);
+            assert_eq!(format!("{:+05.1}", x), results.4);
+            assert_eq!(format!("{:<4.1}", x), results.5);
         }
     }
 
